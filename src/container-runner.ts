@@ -208,6 +208,7 @@ function readSecrets(): Record<string, string> {
     'CLAUDE_CODE_OAUTH_TOKEN',
     'ANTHROPIC_API_KEY',
     'ANTHROPIC_BASE_URL',
+    'ANTHROPIC_MODEL',
   ]);
 }
 

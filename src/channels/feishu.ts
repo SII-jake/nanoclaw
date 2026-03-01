@@ -394,7 +394,7 @@ export class FeishuChannel implements Channel {
 
     try {
       const token = await this.getTenantAccessToken();
-      
+
       // Map internal JID back to original Feishu chat ID if needed
       const actualChatId = this.jidToChatId.get(jid) || jid;
 
@@ -413,7 +413,10 @@ export class FeishuChannel implements Channel {
         },
       );
 
-      logger.info({ jid, actualChatId, length: prefixed.length }, 'Feishu message sent');
+      logger.info(
+        { jid, actualChatId, length: prefixed.length },
+        'Feishu message sent',
+      );
     } catch (err) {
       // Queue for retry
       this.outgoingQueue.push({ chatId: jid, text: prefixed });
@@ -427,7 +430,7 @@ export class FeishuChannel implements Channel {
   async sendImage(jid: string, imageBuffer: Buffer): Promise<void> {
     try {
       const token = await this.getTenantAccessToken();
-      
+
       // Map internal JID back to original Feishu chat ID if needed
       const actualChatId = this.jidToChatId.get(jid) || jid;
 
