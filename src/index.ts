@@ -487,6 +487,18 @@ async function main(): Promise<void> {
     port: FEISHU_PORT ? parseInt(FEISHU_PORT, 10) : undefined,
   };
 
+  // Auto-create main group if no groups are registered
+  if (Object.keys(registeredGroups).length === 0) {
+    logger.info('No groups registered, auto-creating main group');
+    registerGroup('__main__', {
+      name: 'Main',
+      folder: MAIN_GROUP_FOLDER,
+      trigger: `@${ASSISTANT_NAME}`,
+      added_at: new Date().toISOString(),
+      requiresTrigger: false,
+    });
+  }
+
   // Create and connect channels
   // Feishu (optional)
   if (FEISHU_APP_ID && FEISHU_APP_SECRET) {

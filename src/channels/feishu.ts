@@ -291,14 +291,22 @@ export class FeishuChannel implements Channel {
     const isGroup = msg.chat_type === 'group';
     this.opts.onChatMetadata(chatId, timestamp, undefined, 'feishu', isGroup);
 
-    // Only deliver full message for registered groups
+    // Route to main group if chat not registered
     const groups = this.opts.registeredGroups();
+    let targetChatId = chatId;
     if (!groups[chatId]) {
-      logger.info(
-        { chatId, registeredGroups: Object.keys(groups).length },
-        'Feishu message skipped - group not registered. Use IPC to register: {type: "register_group", jid: "' + chatId + '", name: "Group Name", folder: "group-folder", trigger: "@Bobby"}',
-      );
-      return;
+      // Find main group JID
+      const mainEntry = Object.entries(groups).find(([_, g]) => g.folder === 'main');
+      if (mainEntry) {
+        targetChatId = mainEntry[0];
+        logger.info({ chatId, targetChatId }, 'Routing Feishu message to main group');
+      } else {
+        logger.info(
+          { chatId, registeredGroups: Object.keys(groups).length },
+          'Feishu message skipped - no main group available',
+        );
+        return;
+      }
     }
 
     // Skip empty messages
@@ -314,12 +322,12 @@ export class FeishuChannel implements Channel {
       'Feishu message received',
     );
 
-    this.opts.onMessage(chatId, {
+    this.opts.onMessage(targetChatId, {
       id: msg.message_id,
-      chat_jid: chatId,
+      chat_jid: targetChatId,
       sender: senderId,
       sender_name: senderId.slice(0, 8), // Use first 8 chars of open_id as name
-      content: text,
+      content: `[Feishu ${chatId.slice(-8)}] ${text}`,
       timestamp,
       is_from_me: false,
       is_bot_message: isBotMessage,
