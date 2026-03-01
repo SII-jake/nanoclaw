@@ -66,7 +66,9 @@ export class FeishuChannel implements Channel {
 
   async connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.server = createServer((req: IncomingMessage, res: ServerResponse) => this.handleRequest(req, res));
+      this.server = createServer((req: IncomingMessage, res: ServerResponse) =>
+        this.handleRequest(req, res),
+      );
 
       this.server.listen(this.port, '0.0.0.0', () => {
         this.connected = true;
@@ -85,6 +87,8 @@ export class FeishuChannel implements Channel {
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
+    logger.info({ method: req.method, url: req.url }, 'Feishu webhook request received');
+    
     if (req.method !== 'POST' || req.url !== '/webhook') {
       res.statusCode = 404;
       res.end();
@@ -115,9 +119,11 @@ export class FeishuChannel implements Channel {
 
         // URL verification challenge
         if (data.type === 'url_verification') {
+          logger.info({ challenge: data.challenge }, 'Feishu URL verification challenge received');
           res.statusCode = 200;
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify({ challenge: data.challenge }));
+          logger.info('Feishu URL verification challenge responded');
           return;
         }
 
@@ -350,7 +356,10 @@ export class FeishuChannel implements Channel {
 
       while (this.outgoingQueue.length > 0) {
         const item = this.outgoingQueue.shift()!;
-        await this.sendMessage(item.chatId, item.text.replace(`${ASSISTANT_NAME}: `, ''));
+        await this.sendMessage(
+          item.chatId,
+          item.text.replace(`${ASSISTANT_NAME}: `, ''),
+        );
       }
     } finally {
       this.flushing = false;
