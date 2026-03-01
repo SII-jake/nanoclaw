@@ -1,0 +1,355 @@
+import crypto from 'node:crypto';
+import { createServer, IncomingMessage, ServerResponse } from 'node:http';
+
+import axios, { AxiosError } from 'axios';
+
+import { ASSISTANT_NAME } from '../config.js';
+import { logger } from '../logger.js';
+import {
+  Channel,
+  OnInboundMessage,
+  OnChatMetadata,
+  RegisteredGroup,
+} from '../types.js';
+
+export interface FeishuChannelOpts {
+  onMessage: OnInboundMessage;
+  onChatMetadata: OnChatMetadata;
+  registeredGroups: () => Record<string, RegisteredGroup>;
+}
+
+interface FeishuMessage {
+  message_id: string;
+  chat_id: string;
+  chat_type: string;
+  message_type: string;
+  content: string;
+  create_time: string;
+  sender: {
+    sender_id: {
+      open_id: string;
+    };
+    sender_type: string;
+  };
+}
+
+export class FeishuChannel implements Channel {
+  name = 'feishu';
+
+  private server: ReturnType<typeof createServer> | null = null;
+  private connected = false;
+  private opts: FeishuChannelOpts;
+  private port: number;
+  private appId: string;
+  private appSecret: string;
+  private encryptKey?: string;
+  private tenantAccessToken: string | null = null;
+  private tokenExpireTime = 0;
+  private outgoingQueue: Array<{ chatId: string; text: string }> = [];
+  private flushing = false;
+
+  constructor(opts: FeishuChannelOpts) {
+    this.opts = opts;
+    this.port = parseInt(process.env.FEISHU_PORT || '3000', 10);
+    this.appId = process.env.FEISHU_APP_ID ?? '';
+    this.appSecret = process.env.FEISHU_APP_SECRET ?? '';
+    this.encryptKey = process.env.FEISHU_ENCRYPT_KEY;
+
+    if (!this.appId || !this.appSecret) {
+      throw new Error('FEISHU_APP_ID and FEISHU_APP_SECRET must be set');
+    }
+  }
+
+  async connect(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.server = createServer((req: IncomingMessage, res: ServerResponse) => this.handleRequest(req, res));
+
+      this.server.listen(this.port, () => {
+        this.connected = true;
+        logger.info({ port: this.port }, 'Feishu webhook server started');
+        resolve();
+      });
+
+      this.server.on('error', (err: Error) => {
+        logger.error({ err }, 'Feishu server error');
+        reject(err);
+      });
+    });
+  }
+
+  private async handleRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    if (req.method !== 'POST' || req.url !== '/webhook') {
+      res.statusCode = 404;
+      res.end();
+      return;
+    }
+
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+
+    req.on('end', async () => {
+      try {
+        // Verify signature if encrypt key is set
+        if (this.encryptKey) {
+          const signature = req.headers['x-lark-signature'] as string;
+          const timestamp = req.headers['x-lark-request-timestamp'] as string;
+          const nonce = req.headers['x-lark-request-nonce'] as string;
+
+          if (!this.verifySignature(body, signature, timestamp, nonce)) {
+            res.statusCode = 401;
+            res.end(JSON.stringify({ code: 401, msg: 'Invalid signature' }));
+            return;
+          }
+        }
+
+        const data = JSON.parse(body);
+
+        // URL verification challenge
+        if (data.type === 'url_verification') {
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ challenge: data.challenge }));
+          return;
+        }
+
+        // Handle message events
+        if (data.event?.message?.message_type === 'text') {
+          await this.handleMessage(data.event.message);
+        }
+
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ code: 0, msg: 'success' }));
+      } catch (err) {
+        logger.error({ err }, 'Feishu webhook error');
+        res.statusCode = 500;
+        res.end(JSON.stringify({ code: 500, msg: 'Internal error' }));
+      }
+    });
+  }
+
+  private verifySignature(
+    body: string,
+    signature: string,
+    timestamp: string,
+    nonce: string,
+  ): boolean {
+    const signString = `${timestamp}${nonce}${this.encryptKey}${body}`;
+    const hash = crypto.createHash('sha256').update(signString).digest('hex');
+    return hash === signature;
+  }
+
+  private async handleMessage(msg: FeishuMessage): Promise<void> {
+    const chatId = msg.chat_id;
+    const content = JSON.parse(msg.content);
+    const text = content.text?.trim() || '';
+    const senderId = msg.sender?.sender_id?.open_id || '';
+    const timestamp = new Date(parseInt(msg.create_time)).toISOString();
+
+    // Always notify about chat metadata
+    const isGroup = msg.chat_type === 'group';
+    this.opts.onChatMetadata(chatId, timestamp, undefined, 'feishu', isGroup);
+
+    // Only deliver full message for registered groups
+    const groups = this.opts.registeredGroups();
+    if (!groups[chatId]) {
+      return;
+    }
+
+    // Skip empty messages
+    if (!text) {
+      return;
+    }
+
+    // Detect bot messages (messages from ourselves)
+    const isBotMessage = text.startsWith(`${ASSISTANT_NAME}:`);
+
+    logger.info(
+      { chatId, sender: senderId, text: text.slice(0, 100) },
+      'Feishu message received',
+    );
+
+    this.opts.onMessage(chatId, {
+      id: msg.message_id,
+      chat_jid: chatId,
+      sender: senderId,
+      sender_name: senderId.slice(0, 8), // Use first 8 chars of open_id as name
+      content: text,
+      timestamp,
+      is_from_me: false,
+      is_bot_message: isBotMessage,
+    });
+  }
+
+  private async getTenantAccessToken(): Promise<string> {
+    if (this.tenantAccessToken && Date.now() < this.tokenExpireTime) {
+      return this.tenantAccessToken;
+    }
+
+    try {
+      const response = await axios.post(
+        'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal',
+        {
+          app_id: this.appId,
+          app_secret: this.appSecret,
+        },
+      );
+
+      if (response.data.code !== 0) {
+        throw new Error(`Failed to get token: ${response.data.msg}`);
+      }
+
+      this.tenantAccessToken = response.data.tenant_access_token;
+      // Refresh 60 seconds before expiry
+      this.tokenExpireTime = Date.now() + (response.data.expire - 60) * 1000;
+      return this.tenantAccessToken!;
+    } catch (err) {
+      logger.error({ err }, 'Failed to get Feishu access token');
+      throw err;
+    }
+  }
+
+  async sendMessage(jid: string, text: string): Promise<void> {
+    // Prefix bot messages with assistant name
+    const prefixed = `${ASSISTANT_NAME}: ${text}`;
+
+    if (!this.connected) {
+      this.outgoingQueue.push({ chatId: jid, text: prefixed });
+      logger.info(
+        { jid, queueSize: this.outgoingQueue.length },
+        'Feishu disconnected, message queued',
+      );
+      return;
+    }
+
+    try {
+      const token = await this.getTenantAccessToken();
+
+      await axios.post(
+        'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id',
+        {
+          receive_id: jid,
+          msg_type: 'text',
+          content: JSON.stringify({ text: prefixed }),
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        },
+      );
+
+      logger.info({ jid, length: prefixed.length }, 'Feishu message sent');
+    } catch (err) {
+      // Queue for retry
+      this.outgoingQueue.push({ chatId: jid, text: prefixed });
+      logger.warn(
+        { jid, err, queueSize: this.outgoingQueue.length },
+        'Failed to send Feishu message, queued',
+      );
+    }
+  }
+
+  async sendImage(jid: string, imageBuffer: Buffer): Promise<void> {
+    try {
+      const token = await this.getTenantAccessToken();
+
+      // Upload image first
+      const FormData = (await import('form-data')).default;
+      const form = new FormData();
+      form.append('image_type', 'message');
+      form.append('image', imageBuffer, {
+        filename: 'screenshot.png',
+        contentType: 'image/png',
+      });
+
+      const uploadRes = await axios.post(
+        'https://open.feishu.cn/open-apis/im/v1/images',
+        form,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...form.getHeaders(),
+          },
+        },
+      );
+
+      if (uploadRes.data.code !== 0) {
+        throw new Error(`Failed to upload image: ${uploadRes.data.msg}`);
+      }
+
+      const imageKey = uploadRes.data.data.image_key;
+
+      // Send image message
+      await axios.post(
+        'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id',
+        {
+          receive_id: jid,
+          msg_type: 'image',
+          content: JSON.stringify({ image_key: imageKey }),
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        },
+      );
+
+      logger.info({ jid }, 'Feishu image sent');
+    } catch (err) {
+      logger.error({ jid, err }, 'Failed to send Feishu image');
+    }
+  }
+
+  isConnected(): boolean {
+    return this.connected;
+  }
+
+  ownsJid(jid: string): boolean {
+    // Feishu chat IDs are opaque strings (open_chat_id format)
+    return !jid.includes('@');
+  }
+
+  async disconnect(): Promise<void> {
+    this.connected = false;
+    if (this.server) {
+      return new Promise((resolve) => {
+        this.server?.close(() => {
+          logger.info('Feishu server stopped');
+          resolve();
+        });
+      });
+    }
+  }
+
+  // Feishu doesn't have typing indicators in the same way
+  async setTyping(_jid: string, _isTyping: boolean): Promise<void> {
+    // No-op for Feishu
+  }
+
+  private async flushOutgoingQueue(): Promise<void> {
+    if (this.flushing || this.outgoingQueue.length === 0) return;
+    this.flushing = true;
+
+    try {
+      logger.info(
+        { count: this.outgoingQueue.length },
+        'Flushing Feishu outgoing queue',
+      );
+
+      while (this.outgoingQueue.length > 0) {
+        const item = this.outgoingQueue.shift()!;
+        await this.sendMessage(item.chatId, item.text.replace(`${ASSISTANT_NAME}: `, ''));
+      }
+    } finally {
+      this.flushing = false;
+    }
+  }
+}
