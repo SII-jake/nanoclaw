@@ -27,7 +27,11 @@ function decryptFeishuPayload(
     key,
     encryptBuffer.slice(0, 16),
   );
-  let decrypted = decipher.update(encryptBuffer.slice(16).toString('hex'), 'hex', 'utf8');
+  let decrypted = decipher.update(
+    encryptBuffer.slice(16).toString('hex'),
+    'hex',
+    'utf8',
+  );
   decrypted += decipher.final('utf8');
 
   return decrypted;
@@ -235,8 +239,20 @@ export class FeishuChannel implements Channel {
         }
 
         // Handle message events
+        logger.info(
+          { 
+            eventType: data.type,
+            hasMessage: !!data.event?.message,
+            messageType: data.event?.message?.message_type,
+            chatId: data.event?.message?.chat_id,
+          },
+          'Feishu event structure',
+        );
+        
         if (data.event?.message?.message_type === 'text') {
           await this.handleMessage(data.event.message);
+        } else if (data.event) {
+          logger.info({ eventKeys: Object.keys(data.event) }, 'Feishu unhandled event type');
         }
 
         res.statusCode = 200;
@@ -275,6 +291,10 @@ export class FeishuChannel implements Channel {
     // Only deliver full message for registered groups
     const groups = this.opts.registeredGroups();
     if (!groups[chatId]) {
+      logger.info(
+        { chatId, registeredGroups: Object.keys(groups).length },
+        'Feishu message skipped - group not registered',
+      );
       return;
     }
 
