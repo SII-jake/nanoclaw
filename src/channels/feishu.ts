@@ -240,7 +240,7 @@ export class FeishuChannel implements Channel {
 
         // Handle message events
         logger.info(
-          { 
+          {
             eventType: data.type,
             hasMessage: !!data.event?.message,
             messageType: data.event?.message?.message_type,
@@ -248,11 +248,14 @@ export class FeishuChannel implements Channel {
           },
           'Feishu event structure',
         );
-        
+
         if (data.event?.message?.message_type === 'text') {
           await this.handleMessage(data.event.message);
         } else if (data.event) {
-          logger.info({ eventKeys: Object.keys(data.event) }, 'Feishu unhandled event type');
+          logger.info(
+            { eventKeys: Object.keys(data.event) },
+            'Feishu unhandled event type',
+          );
         }
 
         res.statusCode = 200;
@@ -293,7 +296,7 @@ export class FeishuChannel implements Channel {
     if (!groups[chatId]) {
       logger.info(
         { chatId, registeredGroups: Object.keys(groups).length },
-        'Feishu message skipped - group not registered',
+        'Feishu message skipped - group not registered. Use IPC to register: {type: "register_group", jid: "' + chatId + '", name: "Group Name", folder: "group-folder", trigger: "@Bobby"}',
       );
       return;
     }
