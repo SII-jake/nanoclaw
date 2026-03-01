@@ -9,26 +9,28 @@ import { logger } from '../logger.js';
 /**
  * Decrypt Feishu encrypted event payload
  * Uses AES-256-CBC with SHA256 key derivation
+ * Reference: https://open.feishu.cn/document/event-subscription-guide/event-subscriptions/event-subscription-configure-/choose-a-subscription-mode/send-notifications-to-developers-server
  */
-function decryptFeishuPayload(encryptKey: string, encryptedData: string): string {
+function decryptFeishuPayload(
+  encryptKey: string,
+  encryptedData: string,
+): string {
   // Decode base64
-  const buffer = Buffer.from(encryptedData, 'base64');
-  
-  // Extract IV (first 16 bytes) and encrypted content
-  const iv = buffer.slice(0, 16);
-  const encrypted = buffer.slice(16);
-  
+  const encryptBuffer = Buffer.from(encryptedData, 'base64');
+
   // Derive key using SHA256
   const key = crypto.createHash('sha256').update(encryptKey).digest();
-  
-  // Decrypt using AES-256-CBC
-  const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-  let decrypted = decipher.update(encrypted);
-  decrypted = Buffer.concat([decrypted, decipher.final()]);
-  
-  // Remove PKCS7 padding
-  const paddingLength = decrypted[decrypted.length - 1];
-  return decrypted.slice(0, decrypted.length - paddingLength).toString('utf-8');
+
+  // Decrypt using AES-256-CBC (Node.js handles PKCS7 padding automatically)
+  const decipher = crypto.createDecipheriv(
+    'aes-256-cbc',
+    key,
+    encryptBuffer.slice(0, 16),
+  );
+  let decrypted = decipher.update(encryptBuffer.slice(16).toString('hex'), 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+
+  return decrypted;
 }
 import {
   Channel,
@@ -178,24 +180,37 @@ export class FeishuChannel implements Channel {
           res.end(JSON.stringify({ code: 400, msg: 'Invalid JSON' }));
           return;
         }
-        
+
         // Decrypt payload if encrypted
         let data = rawData;
         if (rawData.encrypt && this.encryptKey) {
           try {
-            const decryptedBody = decryptFeishuPayload(this.encryptKey, rawData.encrypt);
+            const decryptedBody = decryptFeishuPayload(
+              this.encryptKey,
+              rawData.encrypt,
+            );
             data = JSON.parse(decryptedBody);
-            logger.info({ decryptedType: data.type }, 'Feishu payload decrypted');
+            logger.info(
+              { decryptedType: data.type },
+              'Feishu payload decrypted',
+            );
           } catch (decryptErr) {
-            logger.error({ err: decryptErr }, 'Feishu payload decryption failed');
+            logger.error(
+              { err: decryptErr },
+              'Feishu payload decryption failed',
+            );
             res.statusCode = 400;
             res.end(JSON.stringify({ code: 400, msg: 'Decryption failed' }));
             return;
           }
         }
-        
+
         logger.info(
-          { type: data.type, hasEvent: !!data.event, hasEncrypt: !!rawData.encrypt },
+          {
+            type: data.type,
+            hasEvent: !!data.event,
+            hasEncrypt: !!rawData.encrypt,
+          },
           'Feishu webhook data parsed',
         );
 
