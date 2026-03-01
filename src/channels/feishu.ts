@@ -287,19 +287,23 @@ export class FeishuChannel implements Channel {
     const senderId = msg.sender?.sender_id?.open_id || '';
     const timestamp = new Date(parseInt(msg.create_time)).toISOString();
 
-    // Always notify about chat metadata
-    const isGroup = msg.chat_type === 'group';
-    this.opts.onChatMetadata(chatId, timestamp, undefined, 'feishu', isGroup);
-
     // Route to main group if chat not registered
     const groups = this.opts.registeredGroups();
     let targetChatId = chatId;
+    let targetIsGroup = msg.chat_type === 'group';
+    
     if (!groups[chatId]) {
       // Find main group JID
-      const mainEntry = Object.entries(groups).find(([_, g]) => g.folder === 'main');
+      const mainEntry = Object.entries(groups).find(
+        ([_, g]) => g.folder === 'main',
+      );
       if (mainEntry) {
         targetChatId = mainEntry[0];
-        logger.info({ chatId, targetChatId }, 'Routing Feishu message to main group');
+        targetIsGroup = true; // Main group is always a group
+        logger.info(
+          { chatId, targetChatId },
+          'Routing Feishu message to main group',
+        );
       } else {
         logger.info(
           { chatId, registeredGroups: Object.keys(groups).length },
@@ -308,6 +312,9 @@ export class FeishuChannel implements Channel {
         return;
       }
     }
+    
+    // Always notify about chat metadata for the target chat
+    this.opts.onChatMetadata(targetChatId, timestamp, undefined, 'feishu', targetIsGroup);
 
     // Skip empty messages
     if (!text) {
