@@ -27,6 +27,7 @@ export interface IpcDeps {
     availableGroups: AvailableGroup[],
     registeredJids: Set<string>,
   ) => void;
+  sendImage?: (jid: string, imageBuffer: Buffer) => Promise<void>;
 }
 
 let ipcWatcherRunning = false;
