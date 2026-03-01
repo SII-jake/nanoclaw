@@ -135,7 +135,9 @@ export class FeishuChannel implements Channel {
             }
             logger.info('Feishu signature verified');
           } else {
-            logger.info('Feishu signature headers missing, skipping verification');
+            logger.info(
+              'Feishu signature headers missing, skipping verification',
+            );
           }
         }
 
@@ -162,9 +164,11 @@ export class FeishuChannel implements Channel {
             { challenge: data.challenge },
             'Feishu URL verification challenge received',
           );
+          const response = JSON.stringify({ challenge: data.challenge });
+          logger.info({ response }, 'Feishu URL verification response body');
           res.statusCode = 200;
           res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ challenge: data.challenge }));
+          res.end(response);
           logger.info('Feishu URL verification challenge responded');
           return;
         }
