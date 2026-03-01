@@ -110,28 +110,43 @@ export class FeishuChannel implements Channel {
     req.on('end', async () => {
       logger.info({ bodyLength: body.length }, 'Feishu webhook body received');
       try {
-        // Verify signature if encrypt key is set
+        // Verify signature if encrypt key is set and headers are present
         if (this.encryptKey) {
           const signature = req.headers['x-lark-signature'] as string;
           const timestamp = req.headers['x-lark-request-timestamp'] as string;
           const nonce = req.headers['x-lark-request-nonce'] as string;
-          
-          logger.info({ hasSignature: !!signature, hasTimestamp: !!timestamp, hasNonce: !!nonce }, 'Feishu signature headers');
 
-          if (!this.verifySignature(body, signature, timestamp, nonce)) {
-            logger.warn('Feishu signature verification failed');
-            res.statusCode = 401;
-            res.end(JSON.stringify({ code: 401, msg: 'Invalid signature' }));
-            return;
+          logger.info(
+            {
+              hasSignature: !!signature,
+              hasTimestamp: !!timestamp,
+              hasNonce: !!nonce,
+            },
+            'Feishu signature headers',
+          );
+
+          // Only verify if headers are present (Feishu sends them when encrypt key is configured)
+          if (signature && timestamp && nonce) {
+            if (!this.verifySignature(body, signature, timestamp, nonce)) {
+              logger.warn('Feishu signature verification failed');
+              res.statusCode = 401;
+              res.end(JSON.stringify({ code: 401, msg: 'Invalid signature' }));
+              return;
+            }
+            logger.info('Feishu signature verified');
+          } else {
+            logger.info('Feishu signature headers missing, skipping verification');
           }
-          logger.info('Feishu signature verified');
         }
 
         let data;
         try {
           data = JSON.parse(body);
         } catch (parseErr) {
-          logger.error({ err: parseErr, bodyPreview: body.slice(0, 200) }, 'Feishu JSON parse failed');
+          logger.error(
+            { err: parseErr, bodyPreview: body.slice(0, 200) },
+            'Feishu JSON parse failed',
+          );
           res.statusCode = 400;
           res.end(JSON.stringify({ code: 400, msg: 'Invalid JSON' }));
           return;
