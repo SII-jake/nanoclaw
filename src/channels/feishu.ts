@@ -164,11 +164,16 @@ export class FeishuChannel implements Channel {
             { challenge: data.challenge },
             'Feishu URL verification challenge received',
           );
-          const response = JSON.stringify({ challenge: data.challenge });
-          logger.info({ response }, 'Feishu URL verification response body');
-          res.statusCode = 200;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(response);
+          const response = { challenge: data.challenge };
+          const responseBody = JSON.stringify(response);
+          logger.info({ responseBody }, 'Feishu URL verification response');
+          
+          res.writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Content-Length': Buffer.byteLength(responseBody),
+          });
+          res.write(responseBody);
+          res.end();
           logger.info('Feishu URL verification challenge responded');
           return;
         }
