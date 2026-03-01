@@ -93,7 +93,10 @@ export class FeishuChannel implements Channel {
     );
 
     if (req.method !== 'POST' || req.url !== '/webhook') {
-      logger.warn({ method: req.method, url: req.url }, 'Feishu webhook invalid request');
+      logger.warn(
+        { method: req.method, url: req.url },
+        'Feishu webhook invalid request',
+      );
       res.statusCode = 404;
       res.end();
       return;
@@ -112,16 +115,31 @@ export class FeishuChannel implements Channel {
           const signature = req.headers['x-lark-signature'] as string;
           const timestamp = req.headers['x-lark-request-timestamp'] as string;
           const nonce = req.headers['x-lark-request-nonce'] as string;
+          
+          logger.info({ hasSignature: !!signature, hasTimestamp: !!timestamp, hasNonce: !!nonce }, 'Feishu signature headers');
 
           if (!this.verifySignature(body, signature, timestamp, nonce)) {
+            logger.warn('Feishu signature verification failed');
             res.statusCode = 401;
             res.end(JSON.stringify({ code: 401, msg: 'Invalid signature' }));
             return;
           }
+          logger.info('Feishu signature verified');
         }
 
-        const data = JSON.parse(body);
-        logger.info({ type: data.type, hasEvent: !!data.event }, 'Feishu webhook data parsed');
+        let data;
+        try {
+          data = JSON.parse(body);
+        } catch (parseErr) {
+          logger.error({ err: parseErr, bodyPreview: body.slice(0, 200) }, 'Feishu JSON parse failed');
+          res.statusCode = 400;
+          res.end(JSON.stringify({ code: 400, msg: 'Invalid JSON' }));
+          return;
+        }
+        logger.info(
+          { type: data.type, hasEvent: !!data.event },
+          'Feishu webhook data parsed',
+        );
 
         // URL verification challenge
         if (data.type === 'url_verification') {
