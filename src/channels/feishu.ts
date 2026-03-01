@@ -82,6 +82,8 @@ export class FeishuChannel implements Channel {
   private tokenExpireTime = 0;
   private outgoingQueue: Array<{ chatId: string; text: string }> = [];
   private flushing = false;
+  // Map internal JIDs to original Feishu chat IDs for replies
+  private jidToChatId: Map<string, string> = new Map();
 
   constructor(opts: FeishuChannelOpts) {
     this.opts = opts;
@@ -291,7 +293,7 @@ export class FeishuChannel implements Channel {
     const groups = this.opts.registeredGroups();
     let targetChatId = chatId;
     let targetIsGroup = msg.chat_type === 'group';
-    
+
     if (!groups[chatId]) {
       // Find main group JID
       const mainEntry = Object.entries(groups).find(
@@ -300,6 +302,8 @@ export class FeishuChannel implements Channel {
       if (mainEntry) {
         targetChatId = mainEntry[0];
         targetIsGroup = true; // Main group is always a group
+        // Store mapping so we can reply to the correct Feishu chat
+        this.jidToChatId.set(targetChatId, chatId);
         logger.info(
           { chatId, targetChatId },
           'Routing Feishu message to main group',
@@ -312,9 +316,15 @@ export class FeishuChannel implements Channel {
         return;
       }
     }
-    
+
     // Always notify about chat metadata for the target chat
-    this.opts.onChatMetadata(targetChatId, timestamp, undefined, 'feishu', targetIsGroup);
+    this.opts.onChatMetadata(
+      targetChatId,
+      timestamp,
+      undefined,
+      'feishu',
+      targetIsGroup,
+    );
 
     // Skip empty messages
     if (!text) {
@@ -384,11 +394,14 @@ export class FeishuChannel implements Channel {
 
     try {
       const token = await this.getTenantAccessToken();
+      
+      // Map internal JID back to original Feishu chat ID if needed
+      const actualChatId = this.jidToChatId.get(jid) || jid;
 
       await axios.post(
         'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id',
         {
-          receive_id: jid,
+          receive_id: actualChatId,
           msg_type: 'text',
           content: JSON.stringify({ text: prefixed }),
         },
@@ -400,7 +413,7 @@ export class FeishuChannel implements Channel {
         },
       );
 
-      logger.info({ jid, length: prefixed.length }, 'Feishu message sent');
+      logger.info({ jid, actualChatId, length: prefixed.length }, 'Feishu message sent');
     } catch (err) {
       // Queue for retry
       this.outgoingQueue.push({ chatId: jid, text: prefixed });
@@ -414,6 +427,9 @@ export class FeishuChannel implements Channel {
   async sendImage(jid: string, imageBuffer: Buffer): Promise<void> {
     try {
       const token = await this.getTenantAccessToken();
+      
+      // Map internal JID back to original Feishu chat ID if needed
+      const actualChatId = this.jidToChatId.get(jid) || jid;
 
       // Upload image first
       const FormData = (await import('form-data')).default;
@@ -445,7 +461,7 @@ export class FeishuChannel implements Channel {
       await axios.post(
         'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id',
         {
-          receive_id: jid,
+          receive_id: actualChatId,
           msg_type: 'image',
           content: JSON.stringify({ image_key: imageKey }),
         },
@@ -457,7 +473,7 @@ export class FeishuChannel implements Channel {
         },
       );
 
-      logger.info({ jid }, 'Feishu image sent');
+      logger.info({ jid, actualChatId }, 'Feishu image sent');
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Feishu image');
     }
