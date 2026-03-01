@@ -87,9 +87,13 @@ export class FeishuChannel implements Channel {
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
-    logger.info({ method: req.method, url: req.url }, 'Feishu webhook request received');
-    
+    logger.info(
+      { method: req.method, url: req.url },
+      'Feishu webhook request received',
+    );
+
     if (req.method !== 'POST' || req.url !== '/webhook') {
+      logger.warn({ method: req.method, url: req.url }, 'Feishu webhook invalid request');
       res.statusCode = 404;
       res.end();
       return;
@@ -101,6 +105,7 @@ export class FeishuChannel implements Channel {
     });
 
     req.on('end', async () => {
+      logger.info({ bodyLength: body.length }, 'Feishu webhook body received');
       try {
         // Verify signature if encrypt key is set
         if (this.encryptKey) {
@@ -116,10 +121,14 @@ export class FeishuChannel implements Channel {
         }
 
         const data = JSON.parse(body);
+        logger.info({ type: data.type, hasEvent: !!data.event }, 'Feishu webhook data parsed');
 
         // URL verification challenge
         if (data.type === 'url_verification') {
-          logger.info({ challenge: data.challenge }, 'Feishu URL verification challenge received');
+          logger.info(
+            { challenge: data.challenge },
+            'Feishu URL verification challenge received',
+          );
           res.statusCode = 200;
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify({ challenge: data.challenge }));
