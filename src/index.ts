@@ -3,6 +3,10 @@ import path from 'path';
 
 import {
   ASSISTANT_NAME,
+  FEISHU_APP_ID,
+  FEISHU_APP_SECRET,
+  FEISHU_ENCRYPT_KEY,
+  FEISHU_PORT,
   IDLE_TIMEOUT,
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
@@ -474,10 +478,19 @@ async function main(): Promise<void> {
     registeredGroups: () => registeredGroups,
   };
 
+  // Feishu-specific options
+  const feishuOpts = {
+    ...channelOpts,
+    appId: FEISHU_APP_ID!,
+    appSecret: FEISHU_APP_SECRET!,
+    encryptKey: FEISHU_ENCRYPT_KEY,
+    port: FEISHU_PORT ? parseInt(FEISHU_PORT, 10) : undefined,
+  };
+
   // Create and connect channels
   // Feishu (optional)
-  if (process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET) {
-    feishu = new FeishuChannel(channelOpts);
+  if (FEISHU_APP_ID && FEISHU_APP_SECRET) {
+    feishu = new FeishuChannel(feishuOpts);
     channels.push(feishu);
     await feishu.connect();
   }

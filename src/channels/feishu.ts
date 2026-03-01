@@ -16,6 +16,10 @@ export interface FeishuChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  appId: string;
+  appSecret: string;
+  encryptKey?: string;
+  port?: number;
 }
 
 interface FeishuMessage {
@@ -50,10 +54,10 @@ export class FeishuChannel implements Channel {
 
   constructor(opts: FeishuChannelOpts) {
     this.opts = opts;
-    this.port = parseInt(process.env.FEISHU_PORT || '3000', 10);
-    this.appId = process.env.FEISHU_APP_ID ?? '';
-    this.appSecret = process.env.FEISHU_APP_SECRET ?? '';
-    this.encryptKey = process.env.FEISHU_ENCRYPT_KEY;
+    this.port = opts.port ?? 3000;
+    this.appId = opts.appId;
+    this.appSecret = opts.appSecret;
+    this.encryptKey = opts.encryptKey;
 
     if (!this.appId || !this.appSecret) {
       throw new Error('FEISHU_APP_ID and FEISHU_APP_SECRET must be set');
@@ -64,7 +68,7 @@ export class FeishuChannel implements Channel {
     return new Promise((resolve, reject) => {
       this.server = createServer((req: IncomingMessage, res: ServerResponse) => this.handleRequest(req, res));
 
-      this.server.listen(this.port, () => {
+      this.server.listen(this.port, '0.0.0.0', () => {
         this.connected = true;
         logger.info({ port: this.port }, 'Feishu webhook server started');
         resolve();
